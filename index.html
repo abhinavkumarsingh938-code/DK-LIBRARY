@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>DK Library Admin Booking</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#4CAF50">
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("service-worker.js");
+      });
+    }
+  </script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f4f4f4; }
+    h1, h2 { text-align: center; }
+    #login, #adminPanel { max-width: 1000px; margin: auto; padding: 20px; background: white; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+    .hidden { display: none; }
+    .seat-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 5px; margin-top: 20px; }
+    .seat { padding: 8px; border: 1px solid #ccc; border-radius: 4px; text-align: center; cursor: pointer; }
+    .booked { background: #ffcccc; }
+    .available { background: #ccffcc; }
+    .expired { background: #f88 !important; }
+    form { margin-top: 20px; }
+    label { display: block; margin: 8px 0 4px; }
+    input, select, button { padding: 8px; width: 100%; margin-bottom: 10px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { padding: 8px; border: 1px solid #ccc; text-align: left; }
+    .actions { margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <h1>DK Library – Admin Booking System (40 Seats)</h1>
+
+  <!-- Login -->
+  <div id="login">
+    <h2>Admin Login</h2>
+    <label for="email">Email:</label>
+    <input type="email" id="email">
+    <label for="password">Password:</label>
+    <input type="password" id="password">
+    <button onclick="login()">Login</button>
+    <p id="loginMsg" style="color:red;"></p>
+  </div>
+
+  <!-- Admin Panel -->
+  <div id="adminPanel" class="hidden">
+    <h2>Admin Dashboard</h2>
+    <button onclick="logout()">Logout</button>
+    <hr>
+
+    <h3>Seat Booking</h3>
+    <form id="bookingForm">
+      <label>Student Name:</label>
+      <input type="text" id="studentName" required>
+      <label>Phone:</label>
+      <input type="text" id="studentPhone" required>
+      <label>Email:</label>
+      <input type="email" id="studentEmail">
+      <label>Shift:</label>
+      <select id="shift" required>
+        <option value="S1">06:00 – 10:00</option>
+        <option value="S2">10:00 – 14:00</option>
+        <option value="S3">14:00 – 18:00</option>
+        <option value="S4">18:00 – 22:00</option>
+        <option value="S5">22:00 – 06:00</option>
+      </select>
+      <label>Seat Number:</label>
+      <select id="seatNumber" required></select>
+      <button type="submit">Book Seat</button>
+    </form>
+
+    <h3>Seat Map</h3>
+    <label for="shiftView">Select Shift:</label>
+    <select id="shiftView" onchange="renderSeats()">
+      <option value="S1">06:00 – 10:00</option>
+      <option value="S2">10:00 – 14:00</option>
+      <option value="S3">14:00 – 18:00</option>
+      <option value="S4">18:00 – 22:00</option>
+      <option value="S5">22:00 – 06:00</option>
+    </select>
+    <div id="seatGrid" class="seat-grid"></div>
+
+    <h3>Active Bookings</h3>
+    <table id="bookingsTable">
+      <thead>
+        <tr>
+          <th>Seat</th><th>Shift</th><th>Name</th><th>Phone</th><th>Email</th><th>Booked On</th><th>Expiry Date</th><th>Action</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <div class="actions">
+      <button onclick="resetAll()">Reset All Bookings</button>
+      <button onclick="printReport()">Print Report</button>
+      <button onclick="exportCSV()">Export CSV</button>
+    </div>
+  </div>
+
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+    import { getFirestore, collection, addDoc, getDocs, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
+    import { getAuth, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js";
+
+   const firebaseConfig = {
+  apiKey: "AIzaSyAZx-4r0co3ppNR_5K2mRjrlWb0NB-_UuE",
+  authDomain: "dk-library-booking.firebaseapp.com",
+  projectId: "dk-library-booking",
+  storageBucket: "dk-library-booking.firebasestorage.app",
+  messagingSenderId: "882472866770",
+  appId: "1:882472866770:web:f9e3a2477baa9519cb2e0b",
+  measurementId: "G-06PJFTXR6D"
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const auth = getAuth(app);
+
+    let bookings = [];
+
+    // ✅ Admin login with Firebase Auth
+    async function login() {
+      const email = document.getElementById("email").value;
+      const password = document.getElementById("password").value;
+      try {
+        await signInWithEmailAndPassword(auth, email, password);
+        document.getElementById("login").classList.add("hidden");
+        document.getElementById("adminPanel").classList.remove("hidden");
+        loadBookings();
+      } catch (error) {
+        document.getElementById("loginMsg").innerText = "Login failed: " + error.message;
+      }
+    }
+
+    async function logout() {
+      await signOut(auth);
+      document.getElementById("adminPanel").classList.add("hidden");
+      document.getElementById("login").classList.remove("hidden");
+    }
+
+    async function loadBookings() {
+      bookings = [];
+      const snapshot = await getDocs(collection(db, "bookings"));
+      snapshot.forEach(docSnap => {
+        bookings.push({ id: docSnap.id, ...docSnap.data() });
+      });
+      renderSeats();
+      renderBookings();
+    }
+
+    async function saveBooking(name, phone, email, shift, seat, bookedOn, expiryDate) {
+      await addDoc(collection(db, "bookings"), {
+        name, phone, email, shift, seat,
+        timestamp: bookedOn.toLocaleString(),
+        expiry: expiryDate.toLocaleDateString()
+      });
+      loadBookings();
+    }
+
+    async function cancelBooking(i) {
+      const bookingId = bookings[i].id;
+      await deleteDoc(doc(db, "bookings", bookingId));
+      loadBookings();
+    }
+
+    document.getElementById("bookingForm").addEventListener("submit", async function(e) {
+      e.preventDefault();
+      const name = document.getElementById("studentName").value;
+      const phone = document.getElementById("studentPhone").value;
+      const email = document.getElementById("studentEmail").value;
+      const shift = document.getElementById("shift").value;
+      const seat = document.getElementById("seatNumber").value;
+
+      const bookedOn = new Date();
+      const expiryDate = new Date(bookedOn);
+      expiryDate.setDate(bookedOn.getDate() + 30);
+
+      await saveBooking(name, phone, email, shift, seat, bookedOn, expiryDate);
+      this.reset();
+      renderSeatOptions();
+    });
+
+    // ✅ Render functions
+    function renderSeats() {
+      const grid = document.getElementById("seatGrid");
+      grid.innerHTML = "";
+      const shift = document.getElementById("shiftView").value;
+      for (let i = 1; i <= 40; i++) {
+        const seat = document.createElement("div");
+        seat.className = "seat";
+        seat.innerText = i;
+        const booked = bookings.find(b => b.seat == i && b.shift == shift);
+        if (booked) {
+          const expired = new Date(booked.expiry) < new Date();
+          seat.classList.add(expired ? "expired" : "booked");
+          seat.title = `${booked.name} (${booked.phone})\nExpiry: ${booked.expiry}`;
+        } else {
+          seat.classList.add("available");
+        }
+        grid.appendChild(seat);
+      }
+      renderSeatOptions();
+    }
+
+    function renderSeatOptions() {
+      const shift = document.getElementById("shift").value;
+      const seatSelect = document.getElementById("seatNumber");
+      seatSelect.innerHTML = "";
+      for (let i = 1; i <= 40; i++) {
+        if (!bookings.find(b => b.seat == i && b.shift == shift)) {
+          let opt = document.createElement("option");
+          opt.value = i;
+          opt.innerText = i;
+          seatSelect.appendChild(opt);
+        }
+      }
+    }
+
+    function renderBookings() {
+      const tbody = document.querySelector("#bookingsTable tbody");
+      tbody.innerHTML = "";
+      bookings.forEach((b, index) => {
+        let bookedOn = b.timestamp || "—";
+        let expiry = b.expiry || "—";
+        let expiredClass = new Date(expiry) < new Date() ? " style='background:#fdd;'" : "";
+        let row = document.createElement("tr");
+        row.innerHTML = `<td>${b.seat}</td><td>${b.shift}</td><td>${b.name}</td><td>${b.phone}</td><td>${b.email}</td><td>${bookedOn}</td><td>${expiry}</td>
+        <td><button onclick="cancelBooking(${index})">Cancel</button></td>`;
+        if (expiredClass) row.setAttribute("style", "background:#fdd;");
+        tbody.appendChild(row);
+      });
+    }
+
+    function resetAll() {
+      if (confirm("Are you sure you want to clear all bookings?")) {
+        bookings.forEach(async b => await deleteDoc(doc(db, "bookings", b.id)));
+        loadBookings();
+      }
+    }
+
+    function printReport() {
+      let reportWindow = window.open("", "", "width=800,height=600");
+      reportWindow.document.write("<h2>DK Library - Booking Report (40 Seats)</h2>");
+      reportWindow.document.write("<table border='1' cellspacing='0' cellpadding='6'><tr><th>Seat</th><th>Shift</th><th>Name</th><th>Phone</th><th>Email</th><th>Booked On</th><th>Expiry</th></tr>");
+      bookings.forEach(b => {
+        let bookedOn = b.timestamp || "—";
+        let expiry = b.expiry || "—";
+        reportWindow.document.write(`<tr><td>${b.seat}</td><td>${b.shift}</td><td>${b.name}</td><td>${b.phone}</td><td>${b.email}</td><td>${bookedOn}</td><td>${expiry}</td></tr>`);
+      });
+      reportWindow.document.write("</table>");
+      reportWindow.document.close();
+      reportWindow.print();
+    }
+
+    function exportCSV() {
+      if (bookings.length === 0) {
+        alert("No bookings to export.");
+        return;
+      }
+      let csv = "Seat,Shift,Name,Phone,Email,Booked On,Expiry\n";
+      bookings.forEach(b => {
+        let bookedOn = b.timestamp || "";
+        let expiry = b.expiry || "";
+        csv += `${b.seat},${b.shift},${b.name},${b.phone},${b.email},${bookedOn},${expiry}\n`;
+      });
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.setAttribute("hidden", "");
+      a.setAttribute("href", url);
+      a.setAttribute("download", "DKLibrary_Bookings.csv");
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  </script>
+</body>
+</html>
